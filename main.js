@@ -18,25 +18,27 @@ import {
     formatsForShader, defaultFormatForShader, getFormat,
 } from './core/formats.js';
 
-// ─── Inline compositor fragment shader ─────────────────────────────────────
-// Not user-editable. Blends the raw source with the main-shader output,
-// then the effect-shader output on top when enabled.
+// ─── Inline pipeline shaders (not user-editable) ───────────────────────────
+//
+// Two passes downstream of the main shader:
+//   MIX_FRAG  — blends raw source under main output via uBaseOpacity
+//               (this is the transparency stage, runs even when no effect
+//                so the effect later sees the *transparent* image, not the
+//                raw main output)
+//   COMP_FRAG — final to-screen pass, optionally blends the effect output
+//               on top of the mix
 
-const COMP_FRAG = `#version 300 es
+const MIX_FRAG = `#version 300 es
 precision highp float;
 
-in vec2 vUv;
+in  vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uSource;
 uniform sampler2D uBase;
-uniform sampler2D uEffect;
-
-uniform float uBaseOpacity;
-uniform int   uEnableEffect;
-uniform float uEffectOpacity;
-uniform vec2  uSourceSize;
-uniform vec2  uResolution;
+uniform float     uBaseOpacity;
+uniform vec2      uSourceSize;
+uniform vec2      uResolution;
 
 vec2 coverUv(vec2 uv, vec2 src, vec2 canvas) {
     float srcAspect = src.x / src.y;
@@ -51,18 +53,30 @@ vec2 coverUv(vec2 uv, vec2 src, vec2 canvas) {
 }
 
 void main() {
-    vec2 srcUv  = coverUv(vUv, uSourceSize, uResolution);
-    vec3 src    = texture(uSource, srcUv).rgb;
-    vec3 base   = texture(uBase,   vUv).rgb;
-    vec3 effect = texture(uEffect, vUv).rgb;
+    vec3 src  = texture(uSource, coverUv(vUv, uSourceSize, uResolution)).rgb;
+    vec3 base = texture(uBase,   vUv).rgb;
+    fragColor = vec4(mix(src, base, uBaseOpacity), 1.0);
+}`;
 
-    vec3 result = mix(src, base, uBaseOpacity);
+const COMP_FRAG = `#version 300 es
+precision highp float;
 
+in  vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uMix;
+uniform sampler2D uEffect;
+uniform int       uEnableEffect;
+uniform float     uEffectOpacity;
+
+void main() {
+    vec3 mixCol = texture(uMix, vUv).rgb;
     if (uEnableEffect == 1) {
-        result = mix(result, effect, uEffectOpacity);
+        vec3 effect = texture(uEffect, vUv).rgb;
+        fragColor = vec4(mix(mixCol, effect, uEffectOpacity), 1.0);
+    } else {
+        fragColor = vec4(mixCol, 1.0);
     }
-
-    fragColor = vec4(result, 1.0);
 }`;
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
@@ -99,8 +113,9 @@ async function boot() {
     const gl     = canvas.getContext('webgl2');
     if (!gl) throw new Error('WebGL2 is not supported in this browser.');
 
-    // ── Compositor program (constant) ────────────────────────────────────────
+    // ── Pipeline programs (constant) ─────────────────────────────────────────
 
+    const progMix  = createProgram(gl, vertSrc, MIX_FRAG);
     const progComp = createProgram(gl, vertSrc, COMP_FRAG);
 
     // ── Quad buffer ──────────────────────────────────────────────────────────
@@ -123,12 +138,13 @@ async function boot() {
     // ── Canvas sizing + FBOs ─────────────────────────────────────────────────
 
     let W = 1080, H = 1080;
-    let fboBase, fboEffect;
+    let fboMain, fboMix, fboEffect;
 
     function rebuildFBOs() {
         canvas.width  = W;
         canvas.height = H;
-        fboBase   = createFBO(gl, W, H);
+        fboMain   = createFBO(gl, W, H);
+        fboMix    = createFBO(gl, W, H);
         fboEffect = createFBO(gl, W, H);
         document.getElementById('meta-res').textContent = `${W} × ${H}`;
     }
@@ -786,9 +802,9 @@ async function boot() {
             gl.generateMipmap(gl.TEXTURE_2D);
         }
 
-        // ── Pass 1: main shader ──────────────────────────────────────────────
+        // ── Pass 1: main shader → fboMain ────────────────────────────────────
         if (progMain) {
-            bindFBO(fboBase);
+            bindFBO(fboMain);
             gl.useProgram(progMain);
             bindTex(0, sourceTex);
             setU1i(gl, progMain, 'uSource', 0);
@@ -805,11 +821,25 @@ async function boot() {
             drawQuad(progMain);
         }
 
-        // ── Pass 2: effect shader (conditional) ──────────────────────────────
+        // ── Pass 2: transparency mix (source ⨉ main) → fboMix ────────────────
+        // Runs even when transparency is 0% — keeps the pipeline branch-free,
+        // and means the effect shader downstream sees the *blended* image.
+        bindFBO(fboMix);
+        gl.useProgram(progMix);
+        bindTex(0, sourceTex);
+        bindTex(1, fboMain.tex);
+        setU1i(gl, progMix, 'uSource',      0);
+        setU1i(gl, progMix, 'uBase',        1);
+        setU1f(gl, progMix, 'uBaseOpacity', state.baseOpacity);
+        setU2f(gl, progMix, 'uSourceSize',  sourceNativeSize[0], sourceNativeSize[1]);
+        setU2f(gl, progMix, 'uResolution',  W, H);
+        drawQuad(progMix);
+
+        // ── Pass 3: effect shader (reads fboMix, conditional) ────────────────
         if (state.effectOn && progEffect) {
             bindFBO(fboEffect);
             gl.useProgram(progEffect);
-            bindTex(0, fboBase.tex);
+            bindTex(0, fboMix.tex);
             setU1i(gl, progEffect, 'uBase', 0);
             setCommonUniforms(progEffect, time);
             applyShaderUniforms(progEffect, state.effectConfig, state.effectUniforms);
@@ -819,17 +849,12 @@ async function boot() {
         // ── Compositor → screen ──────────────────────────────────────────────
         bindFBO(null);
         gl.useProgram(progComp);
-        bindTex(0, sourceTex);
-        bindTex(1, fboBase.tex);
-        bindTex(2, fboEffect.tex);
-        setU1i(gl, progComp, 'uSource',        0);
-        setU1i(gl, progComp, 'uBase',          1);
-        setU1i(gl, progComp, 'uEffect',        2);
-        setU1f(gl, progComp, 'uBaseOpacity',   state.baseOpacity);
+        bindTex(0, fboMix.tex);
+        bindTex(1, fboEffect.tex);
+        setU1i(gl, progComp, 'uMix',           0);
+        setU1i(gl, progComp, 'uEffect',        1);
         setU1i(gl, progComp, 'uEnableEffect',  state.effectOn ? 1 : 0);
         setU1f(gl, progComp, 'uEffectOpacity', state.effectOpacity);
-        setU2f(gl, progComp, 'uSourceSize',    sourceNativeSize[0], sourceNativeSize[1]);
-        setU2f(gl, progComp, 'uResolution',    W, H);
         drawQuad(progComp);
 
         // FPS counter
@@ -926,8 +951,28 @@ async function boot() {
                 recBtn.disabled = true;
 
                 try {
+                    // ffmpeg.wasm 0.11 needs SharedArrayBuffer, which the
+                    // browser only exposes when the page is cross-origin
+                    // isolated (COOP: same-origin + COEP: require-corp headers).
+                    // Catch this *before* trying to load — otherwise the error
+                    // surfaces deep in ffmpeg-core and is hard to diagnose.
+                    if (typeof SharedArrayBuffer === 'undefined' || !self.crossOriginIsolated) {
+                        throw new Error(
+                            'SharedArrayBuffer unavailable — the server must send ' +
+                            'COOP: same-origin and COEP: require-corp headers for MP4 export.'
+                        );
+                    }
+                    if (typeof FFmpeg === 'undefined') {
+                        throw new Error('FFmpeg global is missing — the ffmpeg.min.js script did not load.');
+                    }
+
                     const { createFFmpeg, fetchFile } = FFmpeg;
-                    const ffmpeg = createFFmpeg({ log: false });
+                    // Pin corePath explicitly so we don't depend on the bundled
+                    // auto-resolution (which sometimes races against COEP).
+                    const ffmpeg = createFFmpeg({
+                        log:      false,
+                        corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+                    });
                     await ffmpeg.load();
 
                     ffmpeg.FS('writeFile', 'input.webm', await fetchFile(blob));
@@ -948,6 +993,9 @@ async function boot() {
                     link.click();
                 } catch (err) {
                     console.error('MP4 conversion failed, falling back to WebM:', err);
+                    // Surface the failure in the UI so it doesn't silently
+                    // fall back without explanation.
+                    srcName.textContent = 'MP4 export failed: ' + (err.message || err);
                     const link    = document.createElement('a');
                     link.download = `web-tool_${ts}.webm`;
                     link.href     = URL.createObjectURL(blob);
