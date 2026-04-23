@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Tool — Lux Savage</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ── Canvas area ──────────────────────────────────────────────────── -->
+    <div id="canvas-area">
+        <div id="canvas-wrap">
+            <canvas id="c"></canvas>
+            <div id="drop-overlay">
+                <input type="file" id="file-input" accept="image/*,video/*" style="display:none">
+                <div class="drop-icon">⬡</div>
+                <p class="drop-title">Drop a file here</p>
+                <p class="drop-sub">or click to upload — image or video</p>
+                <small>jpg · png · mp4 · webm · mov</small>
+            </div>
+        </div>
+        <div id="canvas-meta">
+            <span id="meta-res">— × —</span>
+            <span id="meta-fps">— fps</span>
+        </div>
+    </div>
+
+    <!-- ── Control panel ────────────────────────────────────────────────── -->
+    <div id="panel">
+
+        <div class="panel-header">
+            <h1>Web Tool</h1>
+            <small>Lux Savage</small>
+        </div>
+
+        <!-- Source -->
+        <div class="section">
+            <div class="section-label">Source</div>
+            <div class="source-btn-row">
+                <button id="btn-change-source" class="load-btn">↑ Load file</button>
+                <button id="btn-camera" class="load-btn">◉ Camera</button>
+            </div>
+            <button id="btn-switch-camera" class="ghost-btn hidden" style="margin-top:5px;">⇄ Switch camera</button>
+            <span id="source-name">no file loaded</span>
+        </div>
+
+        <!-- Format (populated from formats.js) -->
+        <div class="section">
+            <div class="section-label">Format</div>
+            <div class="btn-group" id="format-group"></div>
+            <div id="custom-res-block" style="display:none; margin-top:8px;">
+                <div class="slider-row">
+                    <label>Width</label>
+                    <input type="number" id="inp-w" value="1080" min="100" max="4096">
+                </div>
+                <div class="slider-row" style="margin-top:4px;">
+                    <label>Height</label>
+                    <input type="number" id="inp-h" value="1080" min="100" max="4096">
+                </div>
+                <button id="btn-apply-res" class="ghost-btn" style="margin-top:6px;">Apply</button>
+            </div>
+        </div>
+
+        <!-- Main shader -->
+        <div class="section">
+            <div class="section-label">
+                Main shader
+                <button id="btn-reload-base" class="reload-btn" title="Reload shader">⟳</button>
+            </div>
+            <select id="sel-main-shader" class="shader-select"></select>
+            <div id="err-base" class="error-box hidden"></div>
+            <div id="main-controls"></div>
+            <div class="slider-row" style="margin-top:8px;">
+                <label>Transparency</label>
+                <input type="range" id="sl-transparency" min="0" max="1" step="0.01" value="0">
+                <span class="slider-val" id="val-transparency">0%</span>
+            </div>
+        </div>
+
+        <!-- Palette (conditionally shown when main shader declares palette) -->
+        <div class="section hidden" id="section-palette">
+            <div class="section-label">Palette</div>
+            <p class="hint">Sorted dark → light for correct dithering.</p>
+            <div id="palette-swatches"></div>
+            <button id="btn-add-color" class="ghost-btn">+ Add color</button>
+            <div style="display:flex; gap:4px; margin-top:6px;">
+                <button id="btn-randomize" class="ghost-btn">⚄ Randomize</button>
+                <button id="btn-save-preset" class="ghost-btn">↓ Save preset</button>
+                <button id="btn-load-preset" class="ghost-btn">↑ Load preset</button>
+                <input type="file" id="inp-preset" accept=".json" style="display:none">
+            </div>
+        </div>
+
+        <!-- Effect shader -->
+        <div class="layer-section disabled" id="section-effect">
+            <div class="layer-header">
+                <label class="toggle">
+                    <input type="checkbox" id="tog-effect">
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                </label>
+                <div>
+                    <div class="layer-name">
+                        Effect
+                        <button id="btn-reload-effect" class="reload-btn hidden" title="Reload shader">⟳</button>
+                    </div>
+                    <div class="layer-desc">off — tap the toggle to enable</div>
+                </div>
+            </div>
+            <div id="effect-body" class="hidden">
+                <select id="sel-effect-shader" class="shader-select"></select>
+                <div id="err-effect" class="error-box hidden"></div>
+                <div class="slider-row">
+                    <label>Opacity</label>
+                    <input type="range" id="sl-effect-op" min="0" max="1" step="0.01" value="0.7">
+                    <span class="slider-val" id="val-effect-op">70%</span>
+                </div>
+                <div id="effect-controls"></div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div id="bottom-controls">
+            <div id="rec-indicator" class="hidden">
+                <span class="rec-dot">●</span>
+                <span>Recording…</span>
+            </div>
+            <button class="action-btn" id="btn-pause-play">
+                <span class="btn-label">Pause</span>
+                <span class="btn-icon">⏸</span>
+            </button>
+            <button class="action-btn" id="btn-export-png">
+                <span class="btn-label">Export image</span>
+                <span class="btn-icon">↓</span>
+            </button>
+            <button class="action-btn" id="btn-record">
+                <span class="btn-label">Record video</span>
+                <span class="btn-icon">⏺</span>
+            </button>
+        </div>
+
+    </div>
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+[
+    { "id": "pixel",    "label": "Pixel",    "file": "shaders/main/pixel.frag"    },
+    { "id": "halftone", "label": "Halftone", "file": "shaders/main/halftone.frag" },
+    { "id": "gb",       "label": "Game Boy", "file": "shaders/main/gb.frag"       }
+]
