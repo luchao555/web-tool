@@ -5,9 +5,8 @@ precision highp float;
 @config
 {
     "name": "Game Boy",
+    "noTransparency": true,
     "uniforms": [
-        { "id": "uLodBias", "label": "Lod Bias", "type": "float", "control": "slider",
-          "min": -1.0, "max": 1.0, "default": 0.0 },
         { "id": "uShadowX", "label": "ShadowX",  "type": "float", "control": "slider",
           "min": -20.0, "max": 20.0, "default": 10.0 },
         { "id": "uShadowY", "label": "ShadowY",  "type": "float", "control": "slider",
@@ -21,9 +20,9 @@ out vec4 fragColor;
 
 uniform float     uTime;
 uniform vec2      uResolution;
+uniform vec2      uSourceSize;    // native source dimensions (for cover-fit crop)
 uniform float     uAspect;
 uniform sampler2D uSource;
-uniform float     uLodBias;
 uniform float     uShadowX;
 uniform float     uShadowY;
 
@@ -31,6 +30,22 @@ uniform float     uShadowY;
 uniform float uParam1;
 uniform float uSpeed;
 uniform vec3  uAccent;
+
+// Cover-fit UV mapping (preserve source aspect, crop overflow).
+// `area` is the destination zone we're fitting the source into,
+// expressed in pixels (so we crop to the inner LCD, not the full canvas).
+vec2 coverUV(vec2 uv, vec2 area, vec2 sourceSize) {
+    float areaAspect   = area.x / area.y;
+    float sourceAspect = sourceSize.x / sourceSize.y;
+
+    vec2 scale;
+    if (sourceAspect > areaAspect) {
+        scale = vec2(areaAspect / sourceAspect, 1.0);
+    } else {
+        scale = vec2(1.0, sourceAspect / areaAspect);
+    }
+    return (uv - 0.5) * scale + 0.5;
+}
 
 #define PI 3.14159265359
 
@@ -195,7 +210,7 @@ void main() {
 
     float lod_x = log2(uResolution.x / grid.x);
     float lod_y = log2(uResolution.y / grid.y);
-    float lod   = max(lod_x, lod_y) + uLodBias;
+    float lod   = max(lod_x, lod_y);
 
     // Background (outer frame)
     vec3 color = yellow;
@@ -219,7 +234,8 @@ void main() {
         vec2 shadow_f       = fract(shadowUV * grid);
         float half_size_shad = 0.6;
 
-        vec4  shadowSrc = textureLod(uSource, shadow_snapped, lod);
+        vec2  shadowSampled = coverUV(shadow_snapped, innerSize, uSourceSize);
+        vec4  shadowSrc     = textureLod(uSource, shadowSampled, lod);
         float shadowLum = luminance(unmultiply(shadowSrc));
 
         vec2  cell_pos = floor(shadowUV * grid);
@@ -249,7 +265,8 @@ void main() {
         vec2 st_snapped = (floor(uv_inner * grid) + 0.5) / grid;
         vec2 st_f       = fract(uv_inner * grid);
 
-        src = textureLod(uSource, st_snapped, lod);
+        vec2 stSampled  = coverUV(st_snapped, innerSize, uSourceSize);
+        src = textureLod(uSource, stSampled, lod);
         vec3 img = unmultiply(src);
 
         vec2 p = st_f - vec2(0.5);

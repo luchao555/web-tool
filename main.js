@@ -237,6 +237,10 @@ async function boot() {
         // Palette section visibility + defaults
         setupPalette(config.palette);
 
+        // Transparency row visibility (some shaders disable it — e.g. GB
+        // because it draws its own frame and source bleed-through is ugly)
+        setupTransparency(!config.noTransparency);
+
         // Formats reachable for this shader + forced default
         rebuildFormatButtons(id);
     }
@@ -563,11 +567,22 @@ async function boot() {
 
     const trSlider = document.getElementById('sl-transparency');
     const trVal    = document.getElementById('val-transparency');
+    const trRow    = trSlider.closest('.slider-row');
     trSlider.addEventListener('input', () => {
         const t = parseFloat(trSlider.value);
         state.baseOpacity    = 1.0 - t;
         trVal.textContent    = Math.round(t * 100) + '%';
     });
+
+    function setupTransparency(enabled) {
+        trRow.classList.toggle('hidden', !enabled);
+        if (!enabled) {
+            // Force-pin to fully opaque so the source never bleeds through
+            trSlider.value      = 0;
+            trVal.textContent   = '0%';
+            state.baseOpacity   = 1.0;
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Source — file + drag/drop
@@ -897,7 +912,7 @@ async function boot() {
 
             recorder = new MediaRecorder(stream, {
                 mimeType,
-                videoBitsPerSecond: 50_000_000,
+                videoBitsPerSecond: 20_000_000,
             });
 
             recorder.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
